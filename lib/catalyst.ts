@@ -20,39 +20,51 @@
 import { ZCAuth, AccessTokenCredential } from "@zcatalyst/auth";
 import { Datastore } from "@zcatalyst/datastore";
 
-const PROJECT_ID = process.env.CATALYST_PROJECT_ID;
-const DEALS_TABLE_ID = process.env.CATALYST_DEALS_TABLE_ID;
-const API_TOKEN = process.env.CATALYST_API_TOKEN;
+// Lazily initialised — do NOT access env vars or throw at module load time.
+// Next.js evaluates this module during the build phase (static page collection)
+// when .env.local is not present; any top-level throw breaks the build.
+let catalystApp: ReturnType<InstanceType<typeof ZCAuth>["init"]> | null = null;
 
-if (!PROJECT_ID || !DEALS_TABLE_ID || !API_TOKEN) {
-  throw new Error(
-    "[catalyst.ts] Missing env vars. Make sure .env.local contains:\n" +
-      "  CATALYST_PROJECT_ID\n" +
-      "  CATALYST_DEALS_TABLE_ID\n" +
-      "  CATALYST_API_TOKEN"
+function getCatalystApp() {
+  if (catalystApp) return catalystApp;
+
+  const PROJECT_ID = process.env.CATALYST_PROJECT_ID;
+  const API_TOKEN = process.env.CATALYST_API_TOKEN;
+
+  if (!PROJECT_ID || !API_TOKEN) {
+    throw new Error(
+      "[catalyst.ts] Missing env vars. Make sure .env.local contains:\n" +
+        "  CATALYST_PROJECT_ID\n" +
+        "  CATALYST_API_TOKEN"
+    );
+  }
+
+  // 'custom' type bypasses the Catalyst Function runtime context check.
+  // project_key must match project_id — if omitted the SDK transport sets
+  // header "PROJECT_ID" to undefined and Node.js throws.
+  catalystApp = new ZCAuth().init(
+    {
+      project_id: PROJECT_ID,
+      project_key: PROJECT_ID,
+      credential: new AccessTokenCredential({ access_token: API_TOKEN }),
+    },
+    { type: "custom" }
   );
-}
 
-// Initialise once for the server process.
-// 'custom' type bypasses the Catalyst Function runtime context check.
-//
-// project_key must be set to a non-undefined value or the SDK transport will
-// set header "PROJECT_ID" to undefined and Node.js will throw.
-// For external callers, the project ID itself satisfies this requirement.
-const catalystApp = new ZCAuth().init(
-  {
-    project_id: PROJECT_ID,
-    project_key: PROJECT_ID, // <-- this was the missing piece
-    credential: new AccessTokenCredential({ access_token: API_TOKEN }),
-  },
-  { type: "custom" }
-);
+  return catalystApp;
+}
 
 /**
  * Returns a Datastore Table instance for the Deals table.
  * Synchronous — only builds the wrapper, no network call yet.
  */
 export function getDealsTable() {
-  const datastore = new Datastore(catalystApp);
-  return datastore.table(DEALS_TABLE_ID as string);
+  const DEALS_TABLE_ID = process.env.CATALYST_DEALS_TABLE_ID;
+  if (!DEALS_TABLE_ID) {
+    throw new Error(
+      "[catalyst.ts] Missing env var CATALYST_DEALS_TABLE_ID in .env.local"
+    );
+  }
+  const datastore = new Datastore(getCatalystApp());
+  return datastore.table(DEALS_TABLE_ID);
 }
